@@ -3,6 +3,11 @@
 ################################################################
 library(splines)
 library(dplyr)
+quiet <- function(x) { 
+  sink(tempfile()) 
+  on.exit(sink()) 
+  invisible(force(x)) 
+} 
 expit <- function(x) exp(x)/(1+exp(x))
 gen_data <- function(size,setting,seed){
   set.seed(seed)
@@ -41,13 +46,29 @@ gen_data <- function(size,setting,seed){
     # two intermediate variables, O2,1 ∼ I {N(1.25*X_11*A1, 1) > 0}, and O_22 ∼ I {N(−1.75*O_12*A1, 1) > 0} are generated;
     O2.1 <- as.numeric(1.25*O1[,1]*A1+rnorm(size,0,1)>0); O2.2 <- as.numeric(-1.75*O1[,2]*A1+rnorm(size,0,1)>0)
     # then the Stage 2 outcome Y2 is generated according to N((0.5 + Y1 + 0.5*A1 +0.5*X_21 − 0.5*X2,2)*A2, 1).
-    Y2_mean <- function(O1,Y1,A2) (0.5 + Y1 + 0.5*A1 +0.5*O2.1 - 0.5*O2.2)*A2 + cnst# previous one (Zhang et al)
+    Y2_mean <- function(O1,O2.1,O2.2,Y1,A2) (0.5 + Y1 + 0.5*A1 +0.5*O2.1 - 0.5*O2.2)*A2 + cnst# previous one (Zhang et al)
     #Y2_mean <- function(O1,Y1,A2) -O1[,2]*A2 + cnst
-    Y2 <- Y2_mean(O1,Y1,A2) + rnorm(size,0,1)
-    taus <- cbind(p1p1=Y1_mean(O1,A1=1)+Y2_mean(O1,Y1,A2=1),
-                  n1p1=Y1_mean(O1,A1=-1)+Y2_mean(O1,Y1,A2=1),
-                  p1n1=Y1_mean(O1,A1=1)+Y2_mean(O1,Y1,A2=-1),
-                  n1n1=Y1_mean(O1,A1=-1)+Y2_mean(O1,Y1,A2=-1))
+    Y2 <- Y2_mean(O1,O2.1,O2.2,Y1,A2) + rnorm(size,0,1)
+    taus <- cbind(p1p1=Y1_mean(O1,A1=1)+Y2_mean(O1,O2.1,O2.2,Y1,A2=1),
+                  n1p1=Y1_mean(O1,A1=-1)+Y2_mean(O1,O2.1,O2.2,Y1,A2=1),
+                  p1n1=Y1_mean(O1,A1=1)+Y2_mean(O1,O2.1,O2.2,Y1,A2=-1),
+                  n1n1=Y1_mean(O1,A1=-1)+Y2_mean(O1,O2.1,O2.2,Y1,A2=-1))
+    
+  }else if (setting == 3){
+    O1[,1] <- O1[,1]/10
+    # Setting 2) 
+    # Stage 1 outcome Y1 is generated according to: 
+    Y1_mean <- function(O1,A1) (1 +1.5*O1[,3]>0)*A1 + 2==(1+1.5*O1[,3]>0)*A1
+    #Y1_mean <- function(O1,A1) O1[,3]*A1 + cnst
+    Y1 <- Y1_mean(O1,A1) + rnorm(size,0,1)
+    # then the Stage 2 outcome Y2 is generated according to:
+    O2.1 <- rnorm(size,0,1); O2.2 <- rep(0,size)
+    Y2_mean <- function(O1,O2.1,Y1,A2) 10*sign(A2/(.01*O1[,2]+.05*O1[,3]+Y1))+O2.1 
+    Y2 <- Y2_mean(O1,O2.1,Y1,A2) + rnorm(size,0,1)
+    taus <- cbind(p1p1=Y1_mean(O1,A1=1)+Y2_mean(O1,O2.1,Y1,A2=1),
+                  n1p1=Y1_mean(O1,A1=-1)+Y2_mean(O1,O2.1,Y1,A2=1),
+                  p1n1=Y1_mean(O1,A1=1)+Y2_mean(O1,O2.1,Y1,A2=-1),
+                  n1n1=Y1_mean(O1,A1=-1)+Y2_mean(O1,O2.1,Y1,A2=-1))
     
   }
   d.argmax <- c('tau_+1+1','tau_-1+1','tau_+1-1','tau_-1-1')[apply(taus,1,which.max)]
@@ -55,7 +76,7 @@ gen_data <- function(size,setting,seed){
   df <- data.frame('O1'=O1,A1,Y1,O2.1,O2.2,A2,Y2,taus,d.argmax,d.argmin)
   df <- df %>% mutate(d1.star=if_else(substr(d.argmax,5,6)=='+1',1,-1),
                       d2.star=if_else(substr(d.argmax,7,8)=='+1',1,-1)) 
-  
+  df <- df[!apply(is.na(df),2,all)]
   return(df)
 }
 
@@ -164,7 +185,7 @@ fit.n.predict <- function(df.train,df.test,O1.vars,O2.bar.vars,surr_fn){
   #Cost at inital theta
   #cost(initial_theta,dat=df.train,surr_fn=1,O1.vars,O2.bar.vars)
   
-  # Derive theta using gradient descent using optim function
+  # Derive theta using optim function
   theta_optim <- optim(par=initial_theta,fn=cost,dat=df.train,surr_fn=surr_fn,O1.vars=O1.vars,O2.bar.vars=O2.bar.vars,method="SANN")
   
   #cost at optimal value of the theta
@@ -211,7 +232,8 @@ fit.bowl <- function(df.train,df.test,O1.vars,O2.bar.vars,surr_fn){
 
 feat_transf <- function(df,setting){
   knots_No <- 2
-  if(setting==1 |setting==2){
+  #if(is.numeric(setting)){
+  if(setting %in% c(1,2,3)){
     features1 <- colnames(df)[grep('O1',colnames(df))]
     features2 <- colnames(df)[grep('O1',colnames(df))]
     
@@ -222,7 +244,7 @@ feat_transf <- function(df,setting){
     df.2 <- data.frame(model.matrix(desing_mat_f2,data=df))
     # Natural cubic splines:
     nms1 <- colnames(df.splines1)
-    # compute basis for each relevant column
+    # compute basis for each relevant continuous column
     df.splines1 <- as.data.frame(lapply(nms1, function(nm) {ns(df.splines1[,nm],df = knots_No)}))
     # name the basis
     colnames(df.splines1) <- paste('H1_',1:ncol(df.splines1),sep = '')
@@ -250,16 +272,16 @@ feat_transf <- function(df,setting){
 }
 gen_df <- function(size,setting,sd) {
   # Generate Dataset
-  if(setting==1 |setting==2){
-    df <- gen_data(size,setting=setting,sd)
+  if(is.numeric(setting)){
+    df <- gen_data(size,setting,sd)
     }else{
     df <- gen_disc_data(size,sd,ret='all')
     }
-  
   # Combute basis matrix for natural cubic splines
   df <- feat_transf(df,setting)[['df']]
   return(df)
-  }
+}
+
 run_sims <- function(size,setting,sims_No){
   if(setting==1 |setting==2){df <- gen_data(10,2,1)}else{df <- gen_disc_data(10,1,ret='all')}
   df_ls <- feat_transf(df,setting)
@@ -450,6 +472,130 @@ run_sims <- function(size,setting,sims_No){
 }
 
 
+run_bowl.Qlearn <- function(size,setting,sims_No){
+  if(is.numeric(setting)){
+    df <- gen_data(10,setting,1)
+    O1.vars <- colnames(df)[grep('O1',colnames(df))]
+    O2.bar.vars <- c(colnames(df)[grep('O',colnames(df))],'A1')
+  }else{
+    df <- gen_disc_data(10,1,ret='all')
+    df_ls <- feat_transf(df,setting)
+    O1.vars <- df_ls[['O1.vars']]
+    O2.bar.vars <- df_ls[['O2.bar.vars']]
+    }
+  V_fn <- matrix(NA,sims_No,3); errs <- matrix(NA,sims_No,4); time.taken <- matrix(NA,sims_No,2)
+  colnames(errs) <- c(paste('d',1:2,'.bowl.hinge',sep=''),'d1.Q','d2.Q');
+  
+  colnames(V_fn) <- c('True','Estimate.bowl','Estimate.Q')
+  colnames(time.taken) <- c('bowl','Q')
+  taus_errd1 <- taus_errd2 <- matrix(NA,0,4)
+  sd <- sim <- 1
+  # Will start loop here:
+  while (sim <= sims_No){
+    tryCatch({
+      cat('Sim No: ',sim,'\n')
+      if(is.numeric(setting)){df <- gen_data(size,setting=setting,sd)}else{df <- gen_disc_data(size,sd,ret='all')}
+      #df <- feat_transf(df,setting)[['df']]
+      df <- df %>% mutate(A1.f = as.factor(A1),A2.f = as.factor(A2))
+      df.train <- df[1:as.integer(size/2),]; df.test <- df[1:as.integer(size/2),]; df.test$int <- 1
+      ##### Fit BOWL with surrogates
+      start.time <- Sys.time()
+      df.test <- quiet(fit.bowl(df.train,df.test,O1.vars,O2.bar.vars,surr_fn =  'exp'))#'exp')#
+      end.time <- Sys.time()
+      time.taken[sim,'bowl'] <- as.numeric(end.time - start.time, units = "secs")
+      ##
+      d1.bowl.errs <- which(with(df.test,d1.hat.bowl.hinge!=d1.star))
+      d2.bowl.errs <- which(with(df.test,d2.hat.bowl.hinge!=d2.star))
+      ##### Fit Q-learning
+      start.time <- Sys.time()
+      ### Second-Stage Analysis
+      # outcome model
+      if(setting=='disc'){
+        moMain <- buildModelObj(model = ~1,
+                                solver.method = 'lm')
+        moCont <- buildModelObj(model =~O1.1+O1.2+O2.2+A1+Y1,
+                                solver.method = 'lm')
+      }else if(setting==1){
+        moMain <- buildModelObj(model = ~O1.1+O1.2+O1.3+(O1.1+O1.2+O1.3)*A1+Y1,
+                                solver.method = 'lm')
+        
+        moCont <- buildModelObj(model =~O1.1+O1.2+O1.3+(O1.1+O1.2+O1.3)*A1+Y1,
+                                solver.method = 'lm')
+      }else if(setting==2){
+        moMain <- buildModelObj(model = ~O1.1+O1.2+O1.3+O2.1+O2.2+(O1.1+O1.2+O1.3+O2.1+O2.2)*A1+Y1,
+                                solver.method = 'lm')
+        
+        moCont <- buildModelObj(model =~O1.1+O1.2+O1.3+O2.1+O2.2+(O1.1+O1.2+O1.3+O2.1+O2.2)*A1+Y1,
+                                solver.method = 'lm')
+      }else if(setting==3){
+        moMain <- buildModelObj(model = ~O1.1+O1.2+O1.3+O2.1+(O1.1+O1.2+O1.3+O2.1)*A1+Y1,
+                                solver.method = 'lm')
+        
+        moCont <- buildModelObj(model =~O1.1+O1.2+O1.3+O2.1+(O1.1+O1.2+O1.3+O2.1)*A1+Y1,
+                                solver.method = 'lm')
+      }
+      
+      # Second stage
+      fitSS <- quiet(qLearn(moMain = moMain, moCont = moCont,
+                      data = df.train, response = df.train$Y2, txName = 'A2'))
+      
+      
+      
+      ### First-Stage Analysis Main Effects Term
+      # main effects model
+      if(setting=='disc'){
+        moMain <- buildModelObj(model = ~1,
+                                solver.method = 'lm')
+        moCont <- buildModelObj(model =~O1.3+O1.1,
+                                solver.method = 'lm')
+      }else if(setting==1 | setting==2){
+        moMain <- buildModelObj(model = ~O1.1+O1.2+O1.3,
+                                solver.method = 'lm')
+        moCont <- buildModelObj(model =~O1.1+O1.2+O1.3,
+                                solver.method = 'lm')
+      }
+      fitFS <- quiet(qLearn(moMain = moMain, moCont = moCont,
+                      data = df.train, response = fitSS, txName = 'A1'))
+      
+      # Estimated value of the optimal treatment regime for training set
+      
+      # Estimated optimal treatment for new data
+      df.test$d1.hat.Q <- optTx(fitFS, df.test)[['optimalTx']]
+      df.test$d2.hat.Q <- optTx(fitSS, df.test)[['optimalTx']]
+      end.time <- Sys.time()
+      time.taken[sim,'Q'] <- as.numeric(end.time - start.time, units = "secs")
+      
+      d1.Q.errs <- which(with(df.test,d1.hat.Q!=d1.star))
+      d2.Q.errs <- which(with(df.test,d2.hat.Q!=d2.star))
+      #####
+      
+      # Computing the mean Value with the estimated regimes:
+      df.test <- df.test %>% mutate(opt.V=case_when(d1.star==1 & d2.star==1~p1p1,d1.star==1 & d2.star==-1~p1n1,d1.star==-1 & d2.star==1~n1p1,T~n1n1),
+                                    # Q learning and BOWL
+                                    V.bowl.hinge=case_when(d1.hat.bowl.hinge==1 & d2.hat.bowl.hinge==1~p1p1,d1.hat.bowl.hinge==1 & d2.hat.bowl.hinge==-1~p1n1,d1.hat.bowl.hinge==-1 & d2.hat.bowl.hinge==1~n1p1,T~n1n1),
+                                    V.Qlearn=case_when(d1.hat.Q==1 & d2.hat.Q==1~p1p1,d1.hat.Q==1 & d2.hat.Q==-1~p1n1,d1.hat.Q==-1 & d2.hat.Q==1~n1p1,T~n1n1))
+      V_fn[sim,] <- c(mean(df.test$opt.V),mean(df.test$V.bowl),mean(df.test$V.Qlearn))
+      
+      errs[sim,c('d1.bowl.hinge','d2.bowl.hinge')] <- c(length(d1.bowl.errs),length(d2.bowl.errs))/nrow(df.test)
+      errs[sim,c('d1.Q','d2.Q')] <- c(length(d1.Q.errs),length(d2.Q.errs))/nrow(df.test)
+      cat('sim: ',sim,', n: ','setting: ',setting,size,'\n')
+      print(round(apply(errs,2,mean,na.rm=T),2))
+      print(round(apply(V_fn,2,mean,na.rm=T),2))
+      print(round(apply(time.taken,2,mean,na.rm=T),2))
+      sim <- sim + 1
+    }, error=function(e){cat("ERROR :",conditionMessage(e), "\n")})
+    sd <- sd + 1
+  }
+  write.csv(x = cbind('d1_err'=errs[,1],'d2_err'=errs[,2],'time'=time.taken[,1],'V_of_DTR_hat'=V_fn[,2],'V_of_DTR_star'=V_fn[,1]),
+            file = paste('../Results/BOWL_size_',as.integer(size/2),'_setting_',setting,'_sims_No_',sims_No,'.csv',sep=''))
+  
+  write.csv(x = cbind('d1_err'=errs[,3],'d2_err'=errs[,4],'time'=time.taken[,2],'V_of_DTR_hat'=V_fn[,3],'V_of_DTR_star'=V_fn[,1]),
+            file = paste('../Results/Qlearning_size_',as.integer(size/2),'_setting_',setting,'_sims_No_',sims_No,'.csv',sep=''))
+  return(list(errs=errs,V_fn=V_fn,taus_errd1=taus_errd1,taus_errd2=taus_errd2,tot.trials=sd,time.taken=time.taken))
+}
+
+
 #####
+
 
 
