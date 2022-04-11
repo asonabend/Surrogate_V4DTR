@@ -3,12 +3,34 @@
 ################################################################
 library(splines)
 library(dplyr)
+library(MASS)
+library(DynTxRegime)
+library(wavelets)
+
+# 
+# # obtain the two series listed in Percival and Walden (2000), page 42
+# X1 <- c(.2,-.4,-.6,-.5,-.8,-.4,-.9,0,-.2,.1,-.1,.1,.7,.9,0,.3)
+# X2 <- c(.2,-.4,-.6,-.5,-.8,-.4,-.9,0,-.2,.1,-.1,.1,-.7,.9,0,.3)
+# # combine them and compute DWT
+# newX <- cbind(X1,X2)
+# wt <- dwt(newX, n.levels=4,  filter="d12", boundary="reflection", fast=FALSE)
+# wt@V[1]
+# wt@V[2]
+# wt@V[3]
+# wt@V[4]
+# 
+# # father es scaling
+# 
+# ####
+# wt.filter.shift(filter, J, wavelet=TRUE, coe=FALSE, modwt=FALSE)
+
 quiet <- function(x) { 
   sink(tempfile()) 
   on.exit(sink()) 
   invisible(force(x)) 
 } 
 expit <- function(x) exp(x)/(1+exp(x))
+
 gen_data <- function(size,setting,seed){
   set.seed(seed)
   O1_dim <- 3
@@ -36,7 +58,7 @@ gen_data <- function(size,setting,seed){
                   n1p1=Y1_mean(O1,A1=-1)+Y2_mean(O1,Y1,A2=1),
                   p1n1=Y1_mean(O1,A1=1)+Y2_mean(O1,Y1,A2=-1),
                   n1n1=Y1_mean(O1,A1=-1)+Y2_mean(O1,Y1,A2=-1))
-  }else if(setting==2){
+  }else if(setting==2){### This is setting 3 in overleaf
     cnst <- 10
     # Setting 2) 
     # Stage 1 outcome Y1 is generated according to: N((1 +1.5X_13)*A1, 1);
@@ -46,7 +68,7 @@ gen_data <- function(size,setting,seed){
     # two intermediate variables, O2,1 ∼ I {N(1.25*X_11*A1, 1) > 0}, and O_22 ∼ I {N(−1.75*O_12*A1, 1) > 0} are generated;
     O2.1 <- as.numeric(1.25*O1[,1]*A1+rnorm(size,0,1)>0); O2.2 <- as.numeric(-1.75*O1[,2]*A1+rnorm(size,0,1)>0)
     # then the Stage 2 outcome Y2 is generated according to N((0.5 + Y1 + 0.5*A1 +0.5*X_21 − 0.5*X2,2)*A2, 1).
-    Y2_mean <- function(O1,O2.1,O2.2,Y1,A2) (0.5 + Y1 + 0.5*A1 +0.5*O2.1 - 0.5*O2.2)*A2 + cnst# previous one (Zhang et al)
+    Y2_mean <- function(O1,O2.1,O2.2,Y1,A2) (-.5 + 0.5*Y1 + 0.5*A1 +0.5*O2.1 - 0.5*O2.2)*A2 + cnst# previous one (Zhang et al)
     #Y2_mean <- function(O1,Y1,A2) -O1[,2]*A2 + cnst
     Y2 <- Y2_mean(O1,O2.1,O2.2,Y1,A2) + rnorm(size,0,1)
     taus <- cbind(p1p1=Y1_mean(O1,A1=1)+Y2_mean(O1,O2.1,O2.2,Y1,A2=1),
@@ -58,28 +80,202 @@ gen_data <- function(size,setting,seed){
     O1[,1] <- O1[,1]/10
     # Setting 2) 
     # Stage 1 outcome Y1 is generated according to: 
-    Y1_mean <- function(O1,A1) (1 +1.5*O1[,3]>0)*A1 + 2==(1+1.5*O1[,3]>0)*A1
+    Y1_mean <- function(O1,A1) (1 +1.5*O1[,3]>0)*A1 + 2#==(1+1.5*O1[,3]>0)*A1
     #Y1_mean <- function(O1,A1) O1[,3]*A1 + cnst
     Y1 <- Y1_mean(O1,A1) + rnorm(size,0,1)
     # then the Stage 2 outcome Y2 is generated according to:
     O2.1 <- rnorm(size,0,1); O2.2 <- rep(0,size)
-    Y2_mean <- function(O1,O2.1,Y1,A2) 10*sign(A2/(.01*O1[,2]+.05*O1[,3]+Y1))+O2.1 
+    Y2_mean <- function(O1,O2.1,Y1,A2) 10*A2*sign(.1*O1[,2]^2-.05*O1[,3]^2)+O2.1 + Y1_mean(O1,A1) 
     Y2 <- Y2_mean(O1,O2.1,Y1,A2) + rnorm(size,0,1)
     taus <- cbind(p1p1=Y1_mean(O1,A1=1)+Y2_mean(O1,O2.1,Y1,A2=1),
                   n1p1=Y1_mean(O1,A1=-1)+Y2_mean(O1,O2.1,Y1,A2=1),
                   p1n1=Y1_mean(O1,A1=1)+Y2_mean(O1,O2.1,Y1,A2=-1),
                   n1n1=Y1_mean(O1,A1=-1)+Y2_mean(O1,O2.1,Y1,A2=-1))
     
+  }else if (setting == 4){
+      # parameters:
+      beta26 <- 0 #Q func. missp.
+      phi24 <- 0 #prop. score missp. 
+      ########
+      # A1:
+      phi1 <- c(.3,-.5)
+      names(phi1) <- c('10','11')
+      # Y1:
+      beta1 <- c(1,1,1,-2)#beta1 <- c(1,1,1,1)#
+      names(beta1) <- c(10:13)
+      # O2:
+      delta1 <- c(0, .5,-.75, .25,1)
+      names(delta1) <- c(10:14)
+      
+      #A2:
+      phi2 <- c(0, .5, .1,-1,phi24,-.1,1)
+      names(phi2) <- c(20:26)
+      
+      #Y2
+      beta2 <- c(3, 0, .1,-.5,-.5,.1,beta26)
+      psi2 <- c(1, .25, .5)#psi2 <- c(1, .25, 1.5)#
+      names(beta2) <- c(20:26)
+      names(psi2) <- c(20:22)
+      ########
+      #set.seed(seed)
+      # True Q function working models:
+      S1 <- ~ O1+O2+O3+O4+O5+O6+A1*((O2<O3^2)*(abs(O4)>O5)); S2 <- ~ Y1+O1+O2+O3+O4+O5+O6+A1+Z.21+Z.21+Z.22+A2*((O1>O2)*(O3>O6)+(abs(O4)<1)+Z.21)# high dimension
+      # True propensity score functions:
+      PS1 <- ~ O1+O2+O3; PS2 <- ~ Y1+O1+A1+Z.21+O2
+      
+      O.var = diag(.9,6,6)+.1
+      O <- data.frame(mvrnorm(n = size, mu=rep(0,6), Sigma=O.var, tol = 1e-6, empirical = FALSE, EISPACK = FALSE))
+      #O[,1:4] <- floor(O[,1:4])
+      #O <- floor(O)
+      colnames(O) <- gsub('X','O',colnames(O))
+      H1check <- model.matrix.lm(PS1,O)
+      phi1 <- c(-.1,1,-1,.1)
+      prob_A1 <- expit(tcrossprod(t(phi1),H1check))
+      #A1 <- rbinom(size,1,prob_A1)
+      #A1[A1==0] <- -1
+      beta1 <- c(.5,.2,-1,-1,.1,-.1,.1)
+      gamma1 <- 10*c(1,-2,-2,-.1,.1,-1.5)
+      
+      H1.Q.p <- model.matrix.lm(S1,cbind(O,A1=1))
+      mean_Y1.p <- t(tcrossprod(t(c(beta1,gamma1,.1)),H1.Q.p))+3
+      H1.Q.n <- model.matrix.lm(S1,cbind(O,A1=-1))
+      mean_Y1.n <- t(tcrossprod(t(c(beta1,gamma1,.1)),H1.Q.n))+3
+      
+      H1.Q <- model.matrix.lm(S1,cbind(O,A1=A1))
+      mean_Y1 <- t(tcrossprod(t(c(beta1,gamma1,.1)),H1.Q))+3
+      Y1 <- mean_Y1 + rnorm(size,0,1) #rbinom(size,1,expit(mean_Y1)) 
+      
+      
+      Z.21 <- as.numeric(1.25*O[,1]*A1+rnorm(n=size,mean=0,sd=1) >0)
+      Z.22 <- as.numeric(-1.75*O[,2]*A1+rnorm(n=size,mean=0,sd=1) >0)
+      
+      H2check <- model.matrix.lm(PS2,data.frame(O1=O[,1],O2=O[,2],Y1=Y1,A1=A1,Z.21=Z.21))
+      mean_A2 <- tcrossprod(t(phi2[1:ncol(H2check)]),H2check)
+      if (phi24 != 0){
+        # model + a misspecified term which is positive when phi24 is different than zero
+        phi24.vec <- t(c(phi24,phi24)/as.numeric(sqrt(crossprod(c(phi24,phi24)))))
+        mean_A2 <- mean_A2 + tcrossprod(phi24.vec,H2check[,c('Y1','Z.21')])*Y1*sin(apply(H2check[,c('Y1','Z.21')],1,crossprod)/(Y1+1))
+      }
+      prob_A2 <- expit(mean_A2)
+      #A2 <- rbinom(size,1,prob_A2)
+      #A2[A2==0] <- -1
+      beta2 <- c(1,beta1,.25,-1,-.5)
+      gamma2 <- 10*c(1,.1,-.1,.1,-.1,.25,-1,-.5)
+      H2.Q <- model.matrix.lm(S2,cbind(O,A1=A1,A2=A2,Y1,Z.21,Z.22))
+      mean_Y2 <- t(tcrossprod(t(c(beta2,gamma2,.1,.1)),H2.Q))+3
+      
+      H2.Q.p <- model.matrix.lm(S2,cbind(O,A1=A1,A2=1,Y1,Z.21,Z.22))
+      mean_Y2.p <- t(tcrossprod(t(c(beta2,gamma2,.1,.1)),H2.Q.p))+3
+      H2.Q.n <- model.matrix.lm(S2,cbind(O,A1=A1,A2=-1,Y1,Z.21,Z.22))
+      mean_Y2.n <- t(tcrossprod(t(c(beta2,gamma2,.1,.1)),H2.Q.n))+3
+      
+      if (beta26 != 0){
+        # model + a misspecified term which is positive when beta26 is different than zero
+        beta26.vec <- t(c(beta26,beta26)/as.numeric(sqrt(crossprod(c(beta26,beta26)))))
+        mean_Y2 <- mean_Y2 + t(tcrossprod(beta26.vec,H2.Q[,c('Z.21','Z.22')]))*Y1*sin(apply(H2.Q[,c('Z.21','Z.22')],1,crossprod)/(Y1+1))
+      }
+      Y2 <- mean_Y2 + rnorm(size,0,1) #rbinom(size,1,expit(mean_Y2))
+      taus <- data.frame(p1p1=mean_Y1.p+mean_Y2.p,
+                         n1p1=mean_Y1.n+mean_Y2.p,
+                         p1n1=mean_Y1.p+mean_Y2.n,
+                         n1n1=mean_Y1.n+mean_Y2.n)
+  }else if (setting == 5){
+    X1 <- rnorm(size,0,1);X2 <- rnorm(size,0,1)
+    Y1_mean <- function(X1,A1) A1*(2*(abs(X1)<1)-1)
+    Y2_mean <- function(X1,X2,A2) A2*(2*(X2-X1^2>0)-1)
+    
+    Y1 <- Y1_mean(X1,A1) + rnorm(size,0,1)
+    Y2 <- Y2_mean(X1,X2,A2) + rnorm(size,0,1)
+    taus <- cbind(p1p1=Y1_mean(X1,A1=1)+Y2_mean(X1,X2,A2=1),
+                  n1p1=Y1_mean(X1,A1=-1)+Y2_mean(X1,X2,A2=1),
+                  p1n1=Y1_mean(X1,A1=1)+Y2_mean(X1,X2,A2=-1),
+                  n1n1=Y1_mean(X1,A1=-1)+Y2_mean(X1,X2,A2=-1))
+    
+  }else if (setting == 6){
+    
+    X <- rbinom(2*size,1,.5);X[X==0] <- -1
+    X1 <- X[1:size];X2 <- X[(size+1):(2*size)]
+    Y1_mean <- 1
+    Y2_mean <- function(A1,A2) (A1==1 & A2==1)*4 + (A1==1 & A2==-1)*3 + (A1==-1 & A2==1)*5 + (A1==-1 & A2==-1)*1
+    
+    Y1 <- Y1_mean + rnorm(size,0,1)
+    Y2 <- Y2_mean(A1,A2) + rnorm(size,0,1)
+    taus <- cbind(p1p1=Y1_mean+Y2_mean(A1=1,A2=1),
+                  n1p1=Y1_mean+Y2_mean(A1=-1,A2=1),
+                  p1n1=Y1_mean+Y2_mean(A1=1,A2=-1),
+                  n1n1=Y1_mean+Y2_mean(A1=-1,A2=-1))
+    
+  }else if (setting %in% c(10:13)){
+    # Covariates
+    X1 <- rnorm(size,0,.1);O11 <- O1[,1]/10;O12 <- O1[,2]/10
+    X2 <- rnorm(size,0,.1);O23 <- (O1[,1]+3)^2*A1/10
+    
+    #X1 <- abs(X1);O11 <- abs(O11);O12 <- abs(O12)
+    #X2 <- abs(X2);O23 <- abs(O23)
+    
+    # Mean functions
+    m01_hard <- function(X1,O11,O12) (2*(abs(X1)<1)+1) + (.1*O12^2+.05*O11^2)
+    m02_hard <- function(X1,X2,O11,O12,O23) (2*(X2-X1^2>0)+1) + (.1*O12^2+.05*O11^2) +.1*O23
+    m11_hard <- function(X1,O11,O12,A1) (A1+1)*(2*(abs(X1)<1)+1) + (A1+1)*(.3*O12+.2*O11)
+    m12_hard <- function(X1,X2,O11,O12,O23,A2) (A2+1)*(2*(X2-X1^2>0)-1) + (A1+1)*(.3*O12+.2*O11) +.1*(A2+1)*O23
+    
+    m01_easy <- function(X1,O11,O12) 2*X1+1 + (.1*O12^2+.05*O11^2)
+    m02_easy <- function(X1,X2,O11,O12,O23) 2*X2+.5*X1^2+1 + (.1*O12^2+.05*O11^2) +.1*O23
+    m11_easy <- function(X1,O11,O12,A1) 2*(A1+1)*(X1+1) + (A1+1)*(.3*O12+.2*O11)
+    m12_easy <- function(X1,X2,O11,O12,O23,A2) (A2+1)*.2*(X2+X1^2+1) + (A1+1)*(.3*O12+.2*O11) +.1*(A2+1)*O23
+    
+    if (setting ==10){
+      Y1_mean <- function(X1,O11,O12,A1) m01_easy(X1,O11,O12) + m11_easy(X1,O11,O12,A1) + .5
+      Y2_mean <- function(X1,X2,O11,O12,O23,A2) m02_easy(X1,X2,O11,O12,O23) + m12_easy(X1,X2,O11,O12,O23,A2) + .5
+    }else if (setting ==11){
+      Y1_mean <- function(X1,O11,O12,A1) m01_hard(X1,O11,O12) + m11_easy(X1,O11,O12,A1) + .5
+      Y2_mean <- function(X1,X2,O11,O12,O23,A2) m02_hard(X1,X2,O11,O12,O23) + m12_easy(X1,X2,O11,O12,O23,A2) + .5
+    }else if (setting ==12){
+      Y1_mean <- function(X1,O11,O12,A1) m01_easy(X1,O11,O12) + m11_hard(X1,O11,O12,A1) + .5
+      Y2_mean <- function(X1,X2,O11,O12,O23,A2) m02_easy(X1,X2,O11,O12,O23) + m12_hard(X1,X2,O11,O12,O23,A2) + .5
+    }else{#setting=13
+      Y1_mean <- function(X1,O11,O12,A1) m01_hard(X1,O11,O12) + m11_hard(X1,O11,O12,A1) + .5
+      Y2_mean <- function(X1,X2,O11,O12,O23,A2) m02_hard(X1,X2,O11,O12,O23) + m12_hard(X1,X2,O11,O12,O23,A2) + .5
+    } 
+    
+    #1) spline vs linear is worrisome
+    #2) use a single phi for simulations
+    #3) take functions that we use in settings 1-5 to make the combination simulations
+    #4) Double check the SGD
+    
+    Y1 <- Y1_mean(X1,O11,O12,A1) + rnorm(size,0,1)
+    Y2 <- Y2_mean(X1,X2,O11,O12,O23,A2) + rnorm(size,0,1)
+    taus <- cbind(p1p1=Y1_mean(X1,O11,O12,A1=1)+Y2_mean(X1,X2,O11,O12,O23,A2=1),
+                  n1p1=Y1_mean(X1,O11,O12,A1=-1)+Y2_mean(X1,X2,O11,O12,O23,A2=1),
+                  p1n1=Y1_mean(X1,O11,O12,A1=1)+Y2_mean(X1,X2,O11,O12,O23,A2=-1),
+                  n1n1=Y1_mean(X1,O11,O12,A1=-1)+Y2_mean(X1,X2,O11,O12,O23,A2=-1))
+    
   }
-  d.argmax <- c('tau_+1+1','tau_-1+1','tau_+1-1','tau_-1-1')[apply(taus,1,which.max)]
-  d.argmin <- c('tau_+1+1','tau_-1+1','tau_+1-1','tau_-1-1')[apply(taus,1,which.min)]
-  df <- data.frame('O1'=O1,A1,Y1,O2.1,O2.2,A2,Y2,taus,d.argmax,d.argmin)
-  df <- df %>% mutate(d1.star=if_else(substr(d.argmax,5,6)=='+1',1,-1),
-                      d2.star=if_else(substr(d.argmax,7,8)=='+1',1,-1)) 
-  df <- df[!apply(is.na(df),2,all)]
+    d.argmax <- c('tau_+1+1','tau_-1+1','tau_+1-1','tau_-1-1')[apply(taus,1,which.max)]
+    d.argmin <- c('tau_+1+1','tau_-1+1','tau_+1-1','tau_-1-1')[apply(taus,1,which.min)]
+  if(setting == 4){
+      df <- data.frame(O,Z.21,Z.22,A1,A2,Y1,Y2,taus,d.argmax,d.argmin)
+    }else if(setting %in% c(5,6)){
+      df <- data.frame(X1,A1,Y1,X2,A2,Y2,taus,d.argmax,d.argmin)
+    }else if(setting %in% c(10:13)){
+      df <- data.frame(O11,O12,O23,X1,A1,Y1,X2,A2,Y2,taus,d.argmax,d.argmin)
+    }else if(setting == 3){
+      df <- data.frame('O1'=O1,A1,Y1,O2.1,A2,Y2,taus,d.argmax,d.argmin)
+    }else{
+      df <- data.frame('O1'=O1,A1,Y1,O2.1,O2.2,A2,Y2,taus,d.argmax,d.argmin)
+    }
+    df <- df %>% mutate(d1.star=if_else(substr(d.argmax,5,6)=='+1',1,-1),
+                        d2.star=if_else(substr(d.argmax,7,8)=='+1',1,-1)) 
+    df <- df[!apply(is.na(df),2,all)]
   return(df)
 }
-
+####
+# for (s in c(10:13)){
+   df10 <- gen_data(size=10,setting=6,seed=1)
+#   #mean(apply(df10[,c('p1p1','n1p1','p1n1','n1n1')],1,max))
+#   print(mean(apply(df10[,c('Y1','Y2')],1,sum)))
+# }
+####
 gen_disc_data <- function(size,seed,ret='all'){
   set.seed(seed)
   c1 <- 1; c2 <- 1
@@ -157,6 +353,25 @@ psi3 <- function(x,y) (1+x/sqrt(1+x^2))*(1+y/sqrt(1+y^2))
 psi5 <- function(x,y) (1+tanh(x))*(1+tanh(y))
 psi4 <- function(x,y) min(x-1,y-1,0)+1
 
+# dat = gen_data(size=1000,setting=6,1)
+# initial_theta <- rep(0,2)
+# O1.vars <- c('X1')
+# O2.bar.vars <- c(O1.vars,'A1','X2')
+# cost_C1 <- function(theta,dat,surr_fn,O1.vars,O2.bar.vars){}
+#   # assign surrogate function to psi
+#   psi <- get(paste('psi',surr_fn,sep=''))
+#   # initial parameters
+#   theta1 <- theta[1:length(O1.vars)]
+#   theta2 <- theta[(length(O1.vars)+1):length(theta)]
+#   # stage 1&2 covariates
+#   O1 <- dat[,O1.vars]
+#   O2.bar <- dat[,O2.bar.vars]
+#   # Compute functions f(O;theta) specified in C1
+#   dat$f1 <- crossprod(t(as.matrix((O1+1)/2)),theta1)
+#   dat$f2 <- crossprod(t(as.matrix(O2.bar)),theta2)
+#   
+#   
+  
 #Cost Function (neg. Value fun.)
 cost <- function(theta,dat,surr_fn,O1.vars,O2.bar.vars){
   # assign surrogate function to psi
@@ -204,24 +419,65 @@ fit.n.predict <- function(df.train,df.test,O1.vars,O2.bar.vars,surr_fn){
   df.test[[paste('d2.hat.psi',surr_fn,sep='')]] <- as.numeric(sign(f2.hat))
   return(df.test)
 }
+# df <- gen_data(2500+100000,3,1)
+# df.train <- df[1:2500,]
+# df.test <- df[2501:100000,]
+# surr_fn =  'hinge'
+# kernel = 'radial'
+# ####
+# 
+# df.train = read.csv('Dropbox (HMS)/Documents/Research/RL/DTR/Surrogate_V4DTR/Code/Simulations/df_sepsis_processed.csv')#read.csv('Dropbox (HMS)/Documents/Research/RL/DTR/Surrogate_V4DTR/Code/Simulations/df_sepsis__.csv')
+# df.train <- df.train[sample(1:dim(df.train)[1],2000),]
+# df.test = read.csv('Dropbox (HMS)/Documents/Research/RL/DTR/Surrogate_V4DTR/Code/Simulations/df_test_sepsis__.csv')
+# O1.vars <- c('O1_heart_rate','O1_sbp','O1_median_dose_vaso','O1_input_4hourly','O1_input_total_tev')
 
-fit.bowl <- function(df.train,df.test,O1.vars,O2.bar.vars,surr_fn){
-  # Constant propensity model
-  moPropen <- buildModelObj(model = ~1,
-                            solver.method = 'glm',
-                            solver.args = list('family'='binomial'),
-                            predict.method = 'predict.glm',
-                            predict.args = list(type='response'))
+# O2.vars <- c('O2_heart_rate','O2_sbp','O2_median_dose_vaso','O2_input_4hourly','O2_input_total_tev')
+# O2.bar.vars <- c(O1.vars,O2.vars)
+
+####
+fit_bowl <- function(df.train,df.test,O1.vars,O2.vars,surr_fn,kernel,lambdas){
+  ###################################
+  # # features that need no scaling
+   non_features <- c('A1','A2','A1.f','A2.f','p1p1','n1p1','p1n1','n1n1','d.argmax','d.argmin','d1.star','d2.star','Y1','Y2')
+   non_features <- !(names(df.train) %in% non_features)
+   ## find mean and sd column-wise of training data
+   trainMean <- apply(df.train[,non_features],2,mean)
+   trainSd <- apply(df.train[,non_features],2,sd)
+   
+   ## center AND scale train & test data using train data stats
+   #df.train[,non_features] <- scale(df.train[,non_features])
+   #df.test[,non_features] <- sweep(sweep(df.test[,non_features], 2L, trainMean), 2, trainSd, "/")
   
-  # Second stage
-  fitSS <- bowl(moPropen = moPropen, surrogate = surr_fn,kernel= 'linear',#lambdas = .5,
-                data = df.train, reward = df.train$Y2, txName = 'A2.f',verbose=0,
-                regime =as.formula(paste('~0+',paste(O2.bar.vars,collapse='+'))))#[1:5]
-  # First stage
-  fitFS <- bowl(moPropen = moPropen, surrogate=surr_fn,kernel= 'linear',
-                data = df.train, reward = df.train$Y1, txName = 'A1.f',
-                regime =as.formula(paste('~0+',paste(O1.vars,collapse='+'))),#[1:3]
-                BOWLObj = fitSS,verbose=0)#, lambdas = c(0.5, 1.0), cvFolds = 4L)
+   df.train <- df.train %>% mutate(Y1 = (Y1-min(Y1))/max(Y1-min(Y1)),
+                                   Y2 = (Y2-min(Y2))/max(Y2-min(Y2)))
+   df.test <- df.test %>% mutate(Y1 = (Y1-min(Y1))/max(Y1-min(Y1)),
+                                 Y2 = (Y2-min(Y2))/max(Y2-min(Y2)))
+  # print(names(df.test))
+  # #
+  df.train$Y2 <- df.train$Y2/max(df.train$Y2)
+  df.test$Y1 <- df.test$Y1/max(df.test$Y1)
+  df.test$Y2 <- df.test$Y2/max(df.test$Y2)
+  #
+  # # Constant propensity model
+   moPropen <- buildModelObj(model = ~1,
+                             solver.method = 'glm',
+                             solver.args = list('family'='binomial'),
+                             predict.method = 'predict.glm',
+                             predict.args = list(type='response'))
+  
+  # # Second stage
+   SS.formula <- as.formula(paste('~1+',paste(O2.vars,collapse='+')))
+   fitSS <- bowl(sigf = 4,moPropen = moPropen, surrogate = surr_fn,kernel = kernel,#lambdas = 50,
+                 data = df.train, reward = df.train$Y2, txName = ifelse('A2' %in% names(df.train),'A2','A2.f'),
+                 verbose=0,# cvFolds = 4L,kparam=c(.01,.1,.5,1),
+                 regime = SS.formula,kparam=.01)#[1:5]
+  # # First stage
+   FS.formula <- as.formula(paste('~1+',paste(O1.vars,collapse='+')))
+   fitFS <- bowl(sigf = 4,moPropen = moPropen, surrogate=surr_fn,kernel = kernel,#lambdas = 5,
+                 data = df.train, reward = df.train$Y1, txName = ifelse('A1' %in% names(df.train),'A1','A1.f'),#[1:3]
+                 BOWLObj = fitSS,verbose=0, #cvFolds = 4L,kparam=c(.01,.1,.5,1),
+                 regime =FS.formula,kparam=.01)#, lambdas = c(0.5, 1.0), cvFolds = 4L),
+  ###################################
   # Estimated value of the optimal treatment regime for training set
   #estimator(fitSS)
   # Estimated optimal treatment for new data
@@ -229,6 +485,16 @@ fit.bowl <- function(df.train,df.test,O1.vars,O2.bar.vars,surr_fn){
   df.test[[paste('d2.hat.bowl.',surr_fn,sep='')]] <- optTx(fitSS, df.test)[['optimalTx']]
   return(df.test)
 }
+
+# df.all <- read.csv('Dropbox (HMS)/Documents/Research/RL/DTR/Surrogate_V4DTR/Code/Simulations/df_sepsis_processed.csv')
+# k_cv = 5
+# folds <- sample(1:nrow(df.all)%%k_cv)
+# fold <- 1  # which ever fold you want to test with
+# df.train <- df.all[folds != fold,]
+# df.test <- df.all[folds == fold,]
+# 
+# fit_bowl(df.train,df.test,O1.vars,O2.vars,surr_fn,kernel,lambdas)
+
 
 feat_transf <- function(df,setting){
   knots_No <- 2
@@ -278,10 +544,10 @@ gen_df <- function(size,setting,sd) {
     df <- gen_disc_data(size,sd,ret='all')
     }
   # Combute basis matrix for natural cubic splines
-  df <- feat_transf(df,setting)[['df']]
+  #df <- feat_transf(df,setting)[['df']]
   return(df)
 }
-
+#head(gen_df(size=100,setting=4,sd=1))
 run_sims <- function(size,setting,sims_No){
   if(setting==1 |setting==2){df <- gen_data(10,2,1)}else{df <- gen_disc_data(10,1,ret='all')}
   df_ls <- feat_transf(df,setting)
@@ -596,6 +862,38 @@ run_bowl.Qlearn <- function(size,setting,sims_No){
 
 
 #####
-
-
-
+# library(ggplot2)
+# library(latex2exp)
+# b <- seq(-3 ,3, by=0.1) # sin/cos are periodic, no point going past 2*pi
+# circ <- data.frame(x=b, y=b^2)
+# dat=data.frame(x=c(0.1,1.5,-1.5,0.1),y=c(0.7,0.5,0.5,-.5),sign=c('+','-','-','-'))
+# ggplot(dat, aes(x, y)) +
+#   geom_text(aes(label=sign,color=sign),size = 10) +
+#   coord_cartesian(xlim=c(-2, 2), ylim=c(-1, 1)) +
+#   geom_polygon(dat=circ,alpha=.3,fill='black') +
+#   theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+#         panel.background = element_blank(), axis.line = element_blank(),
+#         axis.title.x = element_text(size = 16),
+#         axis.title.y = element_text(size = 16)) +
+#   geom_vline(xintercept = 0, colour = "black") +
+#   geom_hline(yintercept = 0, colour = "black") +
+#   xlab(TeX('$\\X_{1}$')) +
+#   ylab(TeX('$\\X_{2}$')) 
+# 
+# 
+# 
+# df <- data.frame(x=c(-3,-1,
+#                      -1,1,
+#                      1,3),y=c(-1,-1,1,1,-1,-1),grp=c(1,1,2,2,3,3))
+# ggplot(df, aes(x, y,group=grp)) +
+#   geom_line(size=2) +
+#   theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+#       panel.background = element_blank(), axis.line = element_blank(),
+#       axis.title.x = element_text(size = 16),
+#       axis.title.y = element_text(size = 16)) +
+#   geom_vline(xintercept = 0, colour = "black") +
+#   geom_hline(yintercept = 0, colour = "black") +
+#   xlab(TeX('$\\X_{1}$')) +
+#   ylab(TeX('$\\mu^*_{1}(X_{1})$')) 
+#   
+# 
